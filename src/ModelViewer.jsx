@@ -2,15 +2,65 @@ import React, { useRef, Suspense, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
+import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader';
 import * as THREE from 'three';
 
-function Model({ objFileContent, onModelLoad }) {
+function Model({ objFileContent, mtlFileContent, onModelLoad, materialColor, wireframe }) {
   const obj = useRef();
   const { scene } = useThree();
 
   useEffect(() => {
-    const loader = new OBJLoader();
-    const object = loader.parse(objFileContent);
+    const objLoader = new OBJLoader();
+
+    let materials;
+    if (mtlFileContent) {
+      const mtlLoader = new MTLLoader();
+      materials = mtlLoader.parse(mtlFileContent);
+      materials.preload();
+      objLoader.setMaterials(materials);
+    }
+
+    const object = objLoader.parse(objFileContent);
+
+    // If MTL materials were loaded, apply them to the object's meshes
+    if (mtlFileContent) {
+      object.traverse((child) => {
+        if (child.isMesh && child.material.name) {
+          console.log('Mesh material name:', child.material.name);
+          const material = materials.materials[child.material.name];
+          if (material) {
+            console.log('Applying material:', material);
+            // Ensure transparency and double-sided rendering for MTL materials
+            if (material.opacity < 1) {
+              material.transparent = true;
+            }
+            material.side = THREE.DoubleSide;
+            child.material = material;
+          }
+        }
+      });
+    } else { // No MTL file, apply a default material
+      object.traverse((child) => {
+        if (child.isMesh) {
+          child.material = new THREE.MeshStandardMaterial({ color: new THREE.Color(materialColor) });
+        }
+      });
+    }
+
+    // Apply wireframe and color override if specified
+    object.traverse((child) => {
+      if (child.isMesh) {
+        if (wireframe) {
+          child.material.wireframe = true;
+        } else {
+          child.material.wireframe = false;
+        }
+        // Override color if materialColor is provided and not using MTL
+        if (!mtlFileContent) {
+          child.material.color.set(materialColor);
+        }
+      }
+    });
 
     // Calculate model information
     let vertices = 0;
@@ -49,20 +99,36 @@ function Model({ objFileContent, onModelLoad }) {
     return () => {
       scene.remove(object);
     };
-  }, [objFileContent, onModelLoad, scene]);
+  }, [objFileContent, mtlFileContent, onModelLoad, scene]);
 
   return obj.current ? <primitive object={obj.current} /> : null;
 }
 
-export function ModelViewer({ objFileContent, backgroundColor, ambientLightIntensity, directionalLightIntensity, onModelLoad, orbitControlsRef }) {
+export function ModelViewer({ objFileContent, mtlFileContent, backgroundColor, ambientLightIntensity, lights, materialColor, wireframe, onModelLoad, orbitControlsRef }) {
+  const controls = useRef();
+
+  // Expose reset function to parent component via ref
+  React.useImperativeHandle(orbitControlsRef, () => ({
+    reset: () => {
+      controls.current.reset();
+    }
+  }));
   return (
     <Canvas camera={{ position: [0, 0, 5] }} style={{ background: backgroundColor }}>
       <ambientLight intensity={ambientLightIntensity} />
-      <directionalLight position={[5, 5, 5]} intensity={directionalLightIntensity} />
+      {lights.map((light) => (
+        <directionalLight
+          key={light.id}
+          position={light.position}
+          intensity={light.intensity}
+          color={light.color}
+        />
+      ))}
+      <gridHelper args={[10, 10, 0x888888, 0x444444]} />
       <Suspense fallback={null}>
-        <Model objFileContent={objFileContent} onModelLoad={onModelLoad} />
+        <Model objFileContent={objFileContent} mtlFileContent={mtlFileContent} onModelLoad={onModelLoad} materialColor={materialColor} wireframe={wireframe} />
       </Suspense>
-      <OrbitControls ref={orbitControlsRef} />
+      <OrbitControls ref={controls} />
     </Canvas>
   );
 }
